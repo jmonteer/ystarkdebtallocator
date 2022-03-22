@@ -37,4 +37,4 @@ apy_calculator.cairo is the Cairo program that takes a set of debt ratios for ce
 This Cairo program will compute a hash of all the inputs it has used to calculate APYs to send it to the L1 smart contract, so inputs can be validated. 
 
 ## Details
-
+![Diagram](./starkdebtallocator.png)
