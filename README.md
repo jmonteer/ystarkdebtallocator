@@ -8,7 +8,7 @@ It uses (zk-)STARKS through Starware's Cairo, SHARP prover and L1 verifier to ge
 To incentivize people running the calculations and proposing solutions, the solution proposer will earn rewards during the time their solution is used. 
 
 ## Intro
-Currently, debt ratios are proposed by vault managers and approved by multisig. Vault managers analyze how each of the strategies is performing, checking their different APYs and then come up with a set of debt ratios, which are set manually.
+Currently, debt ratios are proposed by vault managers and approved by a multisig. Vault managers analyze how each of the strategies is performing, checking their different APYs and then come up with a set of debt ratios, which are set manually. 
 {
     "strategy1": 2500, 
     "strategy2": 2500,
