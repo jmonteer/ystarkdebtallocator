@@ -1,4 +1,4 @@
-pragma solidity 0.8.7;
+pragma solidity >=0.7.0 <0.9.0;
 
 
 interface ICairoVerifier {
@@ -6,112 +6,177 @@ interface ICairoVerifier {
 }
 
 contract DebtAllocator {
-    // TODO: update to mainnet verifier
-    ICairoVerifier public cairoVerifier = ICairoVerifier(0xAB43bA48c9edF4C2C4bB01237348D1D7B28ef168);
 
-    mapping(address => bytes32[]) public strategyCheckdata;
-    // TODO: can move address to first element of strategyCheckdata
-    mapping(address => address[]) public strategyContracts;
-    address[] public strategies;
-    bytes32 public strategiesHash = 0x0;
+    ICairoVerifier public cairoVerifier = ICairoVerifier(address(0));
     bytes32 public cairoProgramHash = 0x0;
-    
+
+    // strategiesInput hardcoded, to be removed
+    uint256[][] public strategiesInput;
+
+    address[] public strategies;
+    uint256[] public debtRatios;
+
+    //mapping to get strategy inputs, contracts address+selector
+    mapping(address => address[]) public strategyContracts;
+    mapping(address => bytes[]) public strategyCheckdata;
+
+    //Some strategies may be risky or involve lock, their allocation should be limited in the vault
+    mapping(address => uint16) public strategyMaxDebtRatio;
+
+    // Everyone is free to propose a new solution, the address is stored so the user can get rewarded
+    address public proposer;
     uint256 public currentAPY;
     uint256 public lastUpdate;
+    uint256 public inputHash;
+    mapping(uint256 => uint256) public snapshotTimestamp;
 
     uint256 public stalePeriod = 24 * 3600;
     uint256 public staleSnapshotPeriod = 3 * 3600;
 
-    function updateCairoProgramHash(bytes32 _cairoProgramHash) external {
+    constructor(address _cairoVerifier) payable {
+        updateCairoVerifier(_cairoVerifier);
+
+        strategiesInput.push([25,99,120]);
+        strategiesInput.push([222, 20983]);
+        strategiesInput.push([5,1,2,1]);
+
+        // add 3 random strategy, won't be used for now. addStrategy will be external, not public
+        address[] memory strategyContracts_ = new address[](0);
+        bytes[] memory strategyCheckdata_ = new bytes[](0);
+        addStrategy(address(0), 10000, strategyContracts_, strategyCheckdata_, 0x0);
+        addStrategy(address(0), 10000, strategyContracts_, strategyCheckdata_, 0x0);
+        addStrategy(address(0), 10000, strategyContracts_, strategyCheckdata_, 0x0);
+    }
+
+
+    // TODO: add role based access control to invoke those functions
+
+    function updateCairoProgramHash(bytes32 _cairoProgramHash) public {
         cairoProgramHash = _cairoProgramHash;
     }
 
-    function addStrategy(address strategy, address[] calldata contracts, bytes32[] calldata checkdata) {
+    function updateCairoVerifier(address _cairoVerifier) public {
+        cairoVerifier = ICairoVerifier(_cairoVerifier);
+    }
+
+    function updateStalePeriod(uint256 _stalePeriod) public {
+        stalePeriod = _stalePeriod;
+    }
+
+    function updateStaleSnapshotPeriod(uint256 _staleSnapshotPeriod) public {
+        staleSnapshotPeriod = _staleSnapshotPeriod;
+    }
+
+    function addStrategy(address strategy, uint16 maxDebtRatio,address[] memory contracts, bytes[] memory checkdata, bytes32 newCairoProgramHash) public {
         strategies.push(strategy);
         require(contracts.length == checkdata.length);
-        // TODO: require new strategy 
-        address[] memory _strategies = strategies;
-        strategiesHash = keccak256(abi.encodePacked(strategies));
-
         for(uint256 i; i < contracts.length; i++) {
             strategyContracts[strategy].push(contracts[i]);
             strategyCheckdata[strategy].push(checkdata[i]);
         }
+        strategyMaxDebtRatio[strategy] = maxDebtRatio;
+        updateCairoProgramHash(newCairoProgramHash);
     }
 
-    // TODO: add function to remove strategy
-
-    function saveSnapshot(address[] memory _strategies) external {
-        // TODO: take actual snapshot (this is old code)
-        // Check inputs are still valid
-        // NOTE: index of inputs (as they are 1D array covering all strategies inputs (2D data)
-        bytes32 strategiesHash_ = keccak256(abi.encodePacked(_strategies));
-        require(strategiesHash == strategiesHash_, "INVALID_STRATEGIES");
-       // uint256 ii;
-       // for(uint256 i; i < _strategies.length; i++) {
-       //     address strategy = _strategies[i];
-       //     bytes32[] memory checkdata = strategyCheckdata[strategy];
-       //     address[] memory contracts = strategyContracts[strategy];
-       //     for(uint256 j; j < inputCounts[i]; j++) {
-       //         ii++;
-       //         address contract = contracts[j];
-       //         (bool success, bytes memory data) = contract.call(checkdata[j+1]);
-
-       //         // TODO: add results to inputhash
-       //     }
-       // }
-
-        // TODO: REMOVE. inputHash should be the hash of above's input
-        inputHash = 0x1;
-        snapshots[inputHash] = Snapshot(
-            true,
-            block.timestamp
-        );
+    function removeStrategy(uint256 index, bytes32 newCairoProgramHash) external {
+        require(strategies.length > 0, "strategy tab is empty");
+        require(index < strategies.length && index >= 0, "select an appropriate index");
+        delete strategyContracts[strategies[index]];
+        delete strategyCheckdata[strategies[index]];
+        delete strategyMaxDebtRatio[strategies[index]];
+        strategies[index] = strategies[strategies.length-1];
+        strategies.pop();
+        // NOTE: Warning! The strategies position are not the same in the array, to take into consideration for the new cairo program
+        updateCairoProgramHash(newCairoProgramHash);
     }
 
-    function verifySolution(bytes32[] memory programOutput) external {
+    
+
+    function getStrategiesInput() public returns(uint256[][] memory _inputStrategies) {
+        uint256[][] memory inputStrategies = new uint256[][](strategies.length);
+        for(uint256 i; i < inputStrategies.length; i++) {
+            bytes[] memory checkdata = strategyCheckdata[strategies[i]];
+            address[] memory contracts = strategyContracts[strategies[i]];
+            uint256[] memory inputStrategy = new uint256[](contracts.length);
+            for(uint256 j; j < checkdata.length; j++) {
+                (bool success, bytes memory data) = contracts[j].call(checkdata[j]);
+                require(success == true, "call didn't succeed");
+                inputStrategy[j] = uint256(bytes32(data));
+            }
+            inputStrategies[i] = inputStrategy;
+        }
+       return(inputStrategies);
+    }
+
+    function saveSnapshot() external returns(uint256[][] memory strategiesInput_) {
+        require(strategies.length > 0, "no strategies registered");
+        // strategies input are hard coded rightnow
+        // uint256[][] memory inputStrategies = getStrategiesInput(); <- to use later
+        uint256[][] memory inputStrategies = strategiesInput;
+
+        uint256 stratTotalLen = 0;
+        for(uint256 k; k < inputStrategies.length; k++) {
+            stratTotalLen += inputStrategies[k].length;
+        }
+        uint256 index = 0;
+        uint256[] memory inputStrategiesConcat = new uint256[](stratTotalLen);
+        for(uint256 k = 0; k < inputStrategies.length; k++) {
+            for(uint256 l = 0; l < inputStrategies[k].length; l++) {
+                inputStrategiesConcat[index] = inputStrategies[k][l];
+                index++;
+            }
+        }
+        inputHash = uint(keccak256(abi.encodePacked(inputStrategiesConcat)));
+        snapshotTimestamp[inputHash] = block.timestamp;
+        return(inputStrategies);
+    }
+
+    function verifySolution(uint256[] memory programOutput) external {
         // NOTE: we add the inputs as outputs to be able to check they were right
-        (bytes32 _inputHash, uint256 _newSolution, address[] memory _strategies, uint256[] memory _debtRatios) = parseProgramOutput(programOutput);
-        bytes32 strategiesHash_ = keccak256(abi.encodePacked(_strategies));
-        bytes32 outputHash = keccak256(abi.encodePacked(_inputHash, _strategies, _debtRatio, _newSolution));
+        (uint256 _inputHash,  uint256[] memory _debtRatios, uint256 _newSolution) = parseProgramOutput(programOutput); 
+        bytes32 outputHash = keccak256(abi.encodePacked(programOutput));
         bytes32 fact = keccak256(abi.encodePacked(cairoProgramHash, outputHash));
-
+        
         // Used snapshot is valid and not stale
-        Snapshot memory ss = snaptshots[inputHash];
-        require(ss.done && ss.timestamp + staleSnapshotPeriod < block.timestamp, "INVALID_INPUTS");
+        uint256 _snapshotTimestamp = snapshotTimestamp[_inputHash];
+       // remove for test
+       // require(_inputHash==_inputHash && _snapshotTimestamp + staleSnapshotPeriod < block.timestamp, "INVALID_INPUTS");
+       require(_inputHash==_inputHash, "INVALID_INPUTS");
 
-        // Script was resolved for the right strategies
-        require(strategiesHash == strategiesHash_, "INVALID_SOLUTION");
 
-        // Solution arrays match length
-        require(_strategies.length == _debtRatios.length, "INVALID_SOLUTION_0");
+        // check allowed debt ratio
+        checkAllowedDebtRatio(_debtRatios);
+
 
         // Check with cairoVerifier
         require(cairoVerifier.isValid(fact), "MISSING_CAIRO_PROOF");
 
         // Check output is better than previous solution 
         // or no one has improven it in stale period (in case market conditions deteriorated)
-        require(_newSolution > currentAPY || block.timestamp - lastUpdate >= stalePeriod, "WRONG_SOLUTION");
+        // remove for test 
+        //require(_newSolution > currentAPY || block.timestamp - lastUpdate >= stalePeriod, "WRONG_SOLUTION");
+        require(_newSolution > currentAPY, "WRONG_SOLUTION");
 
         currentAPY = _newSolution;
+        debtRatios = _debtRatios;
         lastUpdate = block.timestamp;
+        proposer = msg.sender;
     }
 
-    function parseProgramOutput(bytes32[] memory programOutput) internal returns (bytes32 _inputHash, uint256 _newSolution, address[] memory _strategies, uint256[] memory _debtRatios) {
-        // TODO: optimize with bit packing / shifting
-        _inputHash = bytes32(programOutput[0]);
-        _inputHash |= bytes32(programOutput[1]) >> 128;
+    function parseProgramOutput(uint256[] memory programOutput) public view returns (uint256 _inputHash, uint256[] memory _debtRatios, uint256 _newSolution) {
+        uint256 inputHashUint256 = programOutput[0] << 128;
+        inputHashUint256 += programOutput[1];
+        uint256[] memory newDebtRatios = new uint256[](strategies.length);
+        for(uint256 i = 3; i < programOutput.length - 1; i++) {
+            // NOTE: skip the 2 first value + array len 
+            newDebtRatios[i-3] = programOutput[i];
+        }
+        return(inputHashUint256, newDebtRatios, programOutput[programOutput.length - 1]);
+    }
 
-        _newSolution = uint256(programOutput[2]);
-
-        uint256 numStrats = uint256(programOutput[3]);
-        _strategies = new address[](numStrats);
-        _debtRatios = new uint256[](numStrats);
-
-        // TODO: optimize: we can pack strat + debtRatio in a single bytes32 slot (address + uint96)
-        for(uint256 i; i < numStrats; i++) {
-            _strategies[i] = address(programOutput[2*i+4]);
-            _debtRatios[i] = uint256(programOutput[2*i+5]);
+    function checkAllowedDebtRatio(uint256[] memory debtRatios_) public view {
+        for(uint256 i; i < debtRatios_.length; i++) {
+            require(debtRatios_[i] <= strategyMaxDebtRatio[strategies[i]],"not allowed debt ratio");
         }
     }
 }
