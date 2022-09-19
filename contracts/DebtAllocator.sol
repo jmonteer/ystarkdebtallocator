@@ -1,3 +1,5 @@
+//SPDX-License-Identifier: UNLICENSED
+
 pragma solidity >=0.7.0 <0.9.0;
 
 
@@ -9,9 +11,6 @@ contract DebtAllocator {
 
     ICairoVerifier public cairoVerifier = ICairoVerifier(address(0));
     bytes32 public cairoProgramHash = 0x0;
-
-    // strategiesInput hardcoded, to be removed
-    uint256[][] public strategiesInput;
 
     address[] public strategies;
     uint256[] public debtRatios;
@@ -35,39 +34,41 @@ contract DebtAllocator {
 
     constructor(address _cairoVerifier) payable {
         updateCairoVerifier(_cairoVerifier);
-
-        strategiesInput.push([25,99,120]);
-        strategiesInput.push([222, 20983]);
-        strategiesInput.push([5,1,2,1]);
-
-        // add 3 random strategy, won't be used for now. addStrategy will be external, not public
-        address[] memory strategyContracts_ = new address[](0);
-        bytes[] memory strategyCheckdata_ = new bytes[](0);
-        addStrategy(address(0), 10000, strategyContracts_, strategyCheckdata_, 0x0);
-        addStrategy(address(0), 10000, strategyContracts_, strategyCheckdata_, 0x0);
-        addStrategy(address(0), 10000, strategyContracts_, strategyCheckdata_, 0x0);
     }
 
+    event NewSnapshot(uint256[][] inputStrategies, uint256 inputHash, uint256 timestamp);
+    event NewStrategy(address newStrategy, address[] strategyContracts,bytes[] strategyCheckData);
+    event StrategyRemoved(address strategyRemoved);
+    event StrategyMaxDebtRatioUpdated(address newStrategy, uint256 newStrategyMaxDebtRatio);
+    event NewCairoProgramHash(bytes32 newCairoProgramHash);
+    event NewCairoVerifier(address newCairoVerifier);
+    event NewStalePeriod(uint256 newStalePeriod);
+    event NewStaleSnapshotPeriod(uint256 newStaleSnapshotPeriod);
+    event NewSolution(uint256 newApy, uint256[] newDebtRatio, address proposer, uint256 timestamp);
 
     // TODO: add role based access control to invoke those functions
 
     function updateCairoProgramHash(bytes32 _cairoProgramHash) public {
         cairoProgramHash = _cairoProgramHash;
+        emit NewCairoProgramHash(_cairoProgramHash);
     }
 
     function updateCairoVerifier(address _cairoVerifier) public {
         cairoVerifier = ICairoVerifier(_cairoVerifier);
+        emit NewCairoVerifier(_cairoVerifier);
     }
 
     function updateStalePeriod(uint256 _stalePeriod) public {
         stalePeriod = _stalePeriod;
+        emit NewStalePeriod(_stalePeriod);
     }
 
     function updateStaleSnapshotPeriod(uint256 _staleSnapshotPeriod) public {
         staleSnapshotPeriod = _staleSnapshotPeriod;
+        emit NewStaleSnapshotPeriod(_staleSnapshotPeriod);
     }
 
-    function addStrategy(address strategy, uint16 maxDebtRatio,address[] memory contracts, bytes[] memory checkdata, bytes32 newCairoProgramHash) public {
+    function addStrategy(address strategy, uint16 maxDebtRatio,address[] memory contracts, bytes[] memory checkdata, bytes32 newCairoProgramHash) external {
         strategies.push(strategy);
         require(contracts.length == checkdata.length);
         for(uint256 i; i < contracts.length; i++) {
@@ -76,18 +77,23 @@ contract DebtAllocator {
         }
         strategyMaxDebtRatio[strategy] = maxDebtRatio;
         updateCairoProgramHash(newCairoProgramHash);
+        emit NewStrategy(strategy, strategyContracts[strategy], strategyCheckdata[strategy]);
     }
 
     function removeStrategy(uint256 index, bytes32 newCairoProgramHash) external {
+        //TODO: assert debtAllocation is nul for this strategy?
         require(strategies.length > 0, "strategy tab is empty");
         require(index < strategies.length && index >= 0, "select an appropriate index");
-        delete strategyContracts[strategies[index]];
-        delete strategyCheckdata[strategies[index]];
-        delete strategyMaxDebtRatio[strategies[index]];
+        // require debtallocation = 0?
+        address strategy = strategies[index];
+        delete strategyContracts[strategy];
+        delete strategyCheckdata[strategy];
+        delete strategyMaxDebtRatio[strategy];
         strategies[index] = strategies[strategies.length-1];
         strategies.pop();
         // NOTE: Warning! The strategies position are not the same in the array, to take into consideration for the new cairo program
         updateCairoProgramHash(newCairoProgramHash);
+        emit StrategyRemoved(strategy);
     }
 
     
@@ -108,11 +114,9 @@ contract DebtAllocator {
        return(inputStrategies);
     }
 
-    function saveSnapshot() external returns(uint256[][] memory strategiesInput_) {
+    function saveSnapshot() external {
         require(strategies.length > 0, "no strategies registered");
-        // strategies input are hard coded rightnow
-        // uint256[][] memory inputStrategies = getStrategiesInput(); <- to use later
-        uint256[][] memory inputStrategies = strategiesInput;
+        uint256[][] memory inputStrategies = getStrategiesInput(); 
 
         uint256 stratTotalLen = 0;
         for(uint256 k; k < inputStrategies.length; k++) {
@@ -128,7 +132,7 @@ contract DebtAllocator {
         }
         inputHash = uint(keccak256(abi.encodePacked(inputStrategiesConcat)));
         snapshotTimestamp[inputHash] = block.timestamp;
-        return(inputStrategies);
+        emit NewSnapshot(inputStrategies, inputHash, block.timestamp);
     }
 
     function verifySolution(uint256[] memory programOutput) external {
@@ -138,7 +142,7 @@ contract DebtAllocator {
         bytes32 fact = keccak256(abi.encodePacked(cairoProgramHash, outputHash));
         
         // Used snapshot is valid and not stale
-        uint256 _snapshotTimestamp = snapshotTimestamp[_inputHash];
+        // uint256 _snapshotTimestamp = snapshotTimestamp[_inputHash];
        // remove for test
        // require(_inputHash==_inputHash && _snapshotTimestamp + staleSnapshotPeriod < block.timestamp, "INVALID_INPUTS");
        require(_inputHash==_inputHash, "INVALID_INPUTS");
@@ -161,6 +165,8 @@ contract DebtAllocator {
         debtRatios = _debtRatios;
         lastUpdate = block.timestamp;
         proposer = msg.sender;
+
+        emit NewSolution(_newSolution, _debtRatios, msg.sender, block.timestamp);
     }
 
     function parseProgramOutput(uint256[] memory programOutput) public view returns (uint256 _inputHash, uint256[] memory _debtRatios, uint256 _newSolution) {
