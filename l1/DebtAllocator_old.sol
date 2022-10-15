@@ -15,16 +15,9 @@ contract DebtAllocator {
     address[] public strategies;
     uint256[] public debtRatios;
 
-    struct Calculation {
-      uint256 operand1;
-      uint256 operand2;
-      uint256 operation;
-   }
-
     //mapping to get strategy inputs, contracts address+selector
     mapping(address => address[]) public strategyContracts;
     mapping(address => bytes[]) public strategyCheckdata;
-    mapping(address => Calculation[]) public strategyCalculation;
 
     //Some strategies may be risky or involve lock, their allocation should be limited in the vault
     mapping(address => uint16) public strategyMaxDebtRatio;
@@ -43,7 +36,7 @@ contract DebtAllocator {
         updateCairoVerifier(_cairoVerifier);
     }
 
-    event NewSnapshot(uint256[][] dataStrategies, Calculation[][] calculation,uint256 inputHash, uint256 timestamp);
+    event NewSnapshot(uint256[][] inputStrategies, uint256 inputHash, uint256 timestamp);
     event NewStrategy(address newStrategy, address[] strategyContracts,bytes[] strategyCheckData);
     event StrategyRemoved(address strategyRemoved);
     event StrategyMaxDebtRatioUpdated(address newStrategy, uint256 newStrategyMaxDebtRatio);
@@ -75,24 +68,19 @@ contract DebtAllocator {
         emit NewStaleSnapshotPeriod(_staleSnapshotPeriod);
     }
 
-    function addStrategy(address strategy, uint16 maxDebtRatio,address[] memory contracts, bytes[] memory checkdata, Calculation[] memory calculations) external {
+    function addStrategy(address strategy, uint16 maxDebtRatio,address[] memory contracts, bytes[] memory checkdata, bytes32 newCairoProgramHash) external {
         strategies.push(strategy);
         require(contracts.length == checkdata.length);
         for(uint256 i; i < contracts.length; i++) {
             strategyContracts[strategy].push(contracts[i]);
             strategyCheckdata[strategy].push(checkdata[i]);
         }
-
-        for(uint256 j; j < contracts.length; j++) {
-            strategyCalculation[strategy].push(calculations[j]);
-            strategyCalculation[strategy].push(calculations[j]);
-        }
-
         strategyMaxDebtRatio[strategy] = maxDebtRatio;
+        updateCairoProgramHash(newCairoProgramHash);
         emit NewStrategy(strategy, strategyContracts[strategy], strategyCheckdata[strategy]);
     }
 
-    function removeStrategy(uint256 index) external {
+    function removeStrategy(uint256 index, bytes32 newCairoProgramHash) external {
         //TODO: assert debtAllocation is nul for this strategy?
         require(strategies.length > 0, "strategy tab is empty");
         require(index < strategies.length && index >= 0, "select an appropriate index");
@@ -100,83 +88,51 @@ contract DebtAllocator {
         address strategy = strategies[index];
         delete strategyContracts[strategy];
         delete strategyCheckdata[strategy];
-        delete strategyCalculation[strategy];
         delete strategyMaxDebtRatio[strategy];
         strategies[index] = strategies[strategies.length-1];
         strategies.pop();
+        // NOTE: Warning! The strategies position are not the same in the array, to take into consideration for the new cairo program
+        updateCairoProgramHash(newCairoProgramHash);
         emit StrategyRemoved(strategy);
     }
 
     
 
-    //Can't set only view, .call potentially modify state (should not arrive)
-    function getStrategiesData() public returns(uint256[][] memory _dataStrategies) {
-        uint256[][] memory dataStrategies = new uint256[][](strategies.length);
-        for(uint256 i; i < dataStrategies.length; i++) {
+    function getStrategiesInput() public returns(uint256[][] memory _inputStrategies) {
+        uint256[][] memory inputStrategies = new uint256[][](strategies.length);
+        for(uint256 i; i < inputStrategies.length; i++) {
             bytes[] memory checkdata = strategyCheckdata[strategies[i]];
             address[] memory contracts = strategyContracts[strategies[i]];
-            uint256[] memory dataStrategy = new uint256[](contracts.length);
+            uint256[] memory inputStrategy = new uint256[](contracts.length);
             for(uint256 j; j < checkdata.length; j++) {
                 (bool success, bytes memory data) = contracts[j].call(checkdata[j]);
                 require(success == true, "call didn't succeed");
-                dataStrategy[j] = uint256(bytes32(data));
+                inputStrategy[j] = uint256(bytes32(data));
             }
-            dataStrategies[i] = dataStrategy;
+            inputStrategies[i] = inputStrategy;
         }
-       return(dataStrategies);
-    }
-
-    function getStrategiesCalculation() public view returns(Calculation[][] memory _calculationStrategies) {
-        Calculation[][] memory calculationStrategies = new Calculation[][](strategies.length);
-        for(uint256 i; i < calculationStrategies.length; i++) {
-            calculationStrategies[i] = strategyCalculation[strategies[i]];
-        }
-       return(calculationStrategies);
+       return(inputStrategies);
     }
 
     function saveSnapshot() external {
         require(strategies.length > 0, "no strategies registered");
+        uint256[][] memory inputStrategies = getStrategiesInput(); 
 
-        uint256[][] memory dataStrategies = getStrategiesData(); 
-
-        uint256 dataStratTotalLen = 0;
-        for(uint256 i; i < dataStrategies.length; i++) {
-            dataStratTotalLen += dataStrategies[i].length;
+        uint256 stratTotalLen = 0;
+        for(uint256 k; k < inputStrategies.length; k++) {
+            stratTotalLen += inputStrategies[k].length;
         }
-
-        uint256 index1 = 0;
-        uint256[] memory dataStrategiesConcat = new uint256[](dataStratTotalLen);
-        for(uint256 k = 0; k < dataStrategies.length; k++) {
-            for(uint256 l = 0; l < dataStrategies[k].length; l++) {
-                dataStrategiesConcat[index1] = dataStrategies[k][l];
-                index1++;
+        uint256 index = 0;
+        uint256[] memory inputStrategiesConcat = new uint256[](stratTotalLen);
+        for(uint256 k = 0; k < inputStrategies.length; k++) {
+            for(uint256 l = 0; l < inputStrategies[k].length; l++) {
+                inputStrategiesConcat[index] = inputStrategies[k][l];
+                index++;
             }
         }
-
-        Calculation[][] memory calculationStrategies = getStrategiesCalculation();
-        uint256 calculationStratTotalLen = 0;
-        for(uint256 j; j < calculationStrategies.length; j++) {
-            calculationStratTotalLen += calculationStrategies[j].length;
-        }
-
-        uint256 index2 = 0;
-        uint256[] memory calculationStrategiesConcat = new uint256[](calculationStratTotalLen * 3);
-        for(uint256 m = 0; m < calculationStrategies.length; m++) {
-            for(uint256 n = 0; n < calculationStrategies[n].length; n++) {
-                calculationStrategiesConcat[index2] = calculationStrategies[m][n].operand1;
-                index2++;
-                calculationStrategiesConcat[index2] = calculationStrategies[m][n].operand2;
-                index2++;
-                calculationStrategiesConcat[index2] = calculationStrategies[m][n].operation;
-                index2++;
-            }
-        }
-
-        inputHash = uint(keccak256(abi.encodePacked(dataStrategiesConcat, calculationStrategiesConcat)));
-
+        inputHash = uint(keccak256(abi.encodePacked(inputStrategiesConcat)));
         snapshotTimestamp[inputHash] = block.timestamp;
-
-        emit NewSnapshot(dataStrategies, calculationStrategies, inputHash, block.timestamp);
+        emit NewSnapshot(inputStrategies, inputHash, block.timestamp);
     }
 
     function verifySolution(uint256[] memory programOutput) external {

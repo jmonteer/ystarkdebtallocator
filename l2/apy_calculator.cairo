@@ -1,6 +1,7 @@
 %builtins output range_check bitwise 
 
 from starkware.cairo.common.math import unsigned_div_rem, assert_le_felt
+from starkware.cairo.common.math_cmp import is_le
 from starkware.cairo.common.serialize import serialize_word, serialize_array
 from starkware.cairo.common.alloc import alloc
 from starkware.cairo.common.registers import get_label_location
@@ -10,40 +11,12 @@ from starkware.cairo.common.memcpy import memcpy
 from starkware.cairo.common.uint256 import Uint256
 from starkware.cairo.common.keccak import keccak_felts
 
-
-func calcul_score1{ range_check_ptr }(
-        input_strat1_len: felt,
-        input_strat1: felt*,
-        debt_ratio1: felt
-    ) -> (
-       score1: felt
-    ){
-    // calculate apy 10^3 precision
-    //.....
-    let start1_apy_ = input_strat1[0];
-
-    // return score
-    let score1_ = start1_apy_ * debt_ratio1;
-    return(score1= score1_);
-    }
-
-
-func calcul_score2{ range_check_ptr }(
-        input_strat2_len: felt,
-        input_strat2: felt*,
-        debt_ratio2: felt
-    ) -> (
-       score2: felt
-    ){
-    // calculate apy 10^3 precision
-    //.....
-    let step1 = input_strat2[0] + input_strat2[1];
-    let (start2_apy_,r) = unsigned_div_rem(step1, 100);
-
-    // return score
-    let score2_ = start2_apy_ * debt_ratio2;
-    return(score2= score2_);
-    }
+const SUM = 0;
+const SUB = 1;
+const MUL = 2;
+const DIV = 3; 
+// const POW = 4;
+// const SQUARE = 5;
 
 func serialize_word_from_pointer{output_ptr: felt*}(word) {
     assert [output_ptr] = [word];
@@ -52,68 +25,176 @@ func serialize_word_from_pointer{output_ptr: felt*}(word) {
 }
 
 
+func perform_calculation{ range_check_ptr }(
+        _operand1: felt,
+        _operand2: felt,
+        _operation: felt
+    ) -> (
+       result: felt
+    ){
+
+    if(_operation == 0){
+        return(_operand1 + _operand2,);
+    }
+
+    if(_operation == 1){
+        return(_operand1 - _operand2,);
+    }
+
+    if(_operation == 2){
+        return(_operand1 * _operand2,);
+    }
+
+    assert _operation = 3;
+
+    if(_operation == 3){
+        let (result_,_) = unsigned_div_rem(_operand1, _operand2);
+        return(result_,);
+    } 
+    return(0,);
+}
+
+
+func calcul_score_strategy{ range_check_ptr }(
+        _debt_ratio: felt,
+        _data_strat_len: felt,
+        _data_strat: felt*,
+        _calcul_strat_len: felt,
+        _calcul_strat: felt*,
+        _step_len: felt,
+        _step: felt*,
+    ) -> (
+       score: felt
+    ){
+    alloc_locals;
+    if(_calcul_strat_len == _step_len){
+        return(_step[_step_len - 1] * _debt_ratio,);
+    }
+    let is_operand1_input_ = is_le(_calcul_strat[3*_step_len],9999);
+    let is_operand2_input_ = is_le(_calcul_strat[3*_step_len + 1],9999);
+    let is_operand1_const_ = is_le(_calcul_strat[3*_step_len],19999);
+    let is_operand2_const_ = is_le(_calcul_strat[3*_step_len + 1],19999);
+
+    // _calcul_strat[_step_len].operand2 >= 10000 means we are taking operand from previous step better than strategy input 
+    // over 20,000 we take a const operand -> op1: 10,000, op2:20004 operation:0 means we want step 0 (10000 - 10000) + 4 (20004 - 20000) 
+    local op1_: felt;
+    if(is_operand1_input_ == 1 ){
+         assert op1_ = _data_strat[_calcul_strat[3*_step_len]];
+    } else {
+        if(is_operand1_const_ == 1){
+            assert op1_ = _step[_calcul_strat[3*_step_len] - 10000];
+        } else {
+            assert op1_ = _calcul_strat[3*_step_len] - 20000;
+        }
+    }
+    local op2_: felt;
+    if(is_operand2_input_ == 1 ){
+        assert op2_ = _data_strat[_calcul_strat[3*_step_len + 1]];
+    } else {
+        if(is_operand2_const_ == 1){
+            assert op2_ = _step[_calcul_strat[3*_step_len + 1] - 10000];
+        } else {
+            assert op2_ = _calcul_strat[3*_step_len + 1] - 20000;
+        }
+    }
+    let (result_) = perform_calculation(op1_, op2_, _calcul_strat[3 * _step_len + 2]);
+    assert _step[_step_len] = result_;
+    return calcul_score_strategy(_debt_ratio, _data_strat_len, _data_strat, _calcul_strat_len, _calcul_strat, _step_len + 1, _step);
+}
+
+func run_input{ range_check_ptr }(
+        _debt_ratio: felt*,
+        _data_strat: felt*,
+        _calcul_strat: felt*,
+        _cumulative_score: felt,
+        _cumulative_data_strat_array_len: felt,
+        _cumulative_data_strat_array: felt*,
+        _cumulative_calculation_strat_array_len: felt,
+        _cumulative_calculation_strat_array: felt*,
+        _cumulative_debt_: felt,
+    ) -> (
+       final_score: felt,
+       input_hash: Uint256,
+    ){
+    alloc_locals;
+    if(_cumulative_debt_ == 10000){
+        memcpy(_cumulative_data_strat_array + _cumulative_data_strat_array_len, _cumulative_calculation_strat_array, _cumulative_calculation_strat_array_len);
+        let (input_hash_) = keccak_felts(_cumulative_data_strat_array_len + _cumulative_calculation_strat_array_len, _cumulative_data_strat_array);
+        return(_cumulative_score, input_hash_,);
+    }
+
+    let (local steps : felt*) = alloc();
+    let (score_) = calcul_score_strategy(
+        _debt_ratio[0],
+        _data_strat[0],
+        _data_strat + 1,
+        _calcul_strat[0],
+        _calcul_strat + 1,
+        0,
+        steps);
+    
+    let new_cumulative_score_ = _cumulative_score + score_;
+
+    // memcpy(dst: felt*, src: felt*, len)
+    memcpy(_cumulative_data_strat_array + _cumulative_data_strat_array_len, _data_strat + 1,  _data_strat[0]);
+    memcpy(_cumulative_calculation_strat_array + _cumulative_calculation_strat_array_len, _calcul_strat + 1,  _calcul_strat[0]*3);
+
+    let new_cumulative_debt_ = _cumulative_debt_ + _debt_ratio[0];
+    return run_input(
+        _debt_ratio + 1,
+        _data_strat + 1 +  _data_strat[0],
+        _calcul_strat + 1 + _calcul_strat[0]* 3,
+        new_cumulative_score_,
+        _cumulative_data_strat_array_len + _data_strat[0],
+        _cumulative_data_strat_array,
+        _cumulative_calculation_strat_array_len + _calcul_strat[0]*3,
+        _cumulative_calculation_strat_array,
+        new_cumulative_debt_);
+}
+
+
 func main{output_ptr: felt*, range_check_ptr, bitwise_ptr : BitwiseBuiltin*}() {
     alloc_locals;
-    // let (local strategies : felt*) = alloc();
+    tempvar debt_ratio_len: felt;
     let (local debt_ratio : felt*) = alloc();
-    let (local strat1 : felt*) = alloc();
-    let (local strat2 : felt*) = alloc();
-    let (local strat3 : felt*) = alloc();
+    let (local strat_data : felt*) = alloc();
+    let (local strat_calculation : felt*) = alloc();
 
-    // let (keccak_ptr : felt*) = alloc();
-    // local keccak_ptr_start : felt* = keccak_ptr;
-
-
-        // assert len(program_input['strategies']) == 3
-        // assert program_input['strategies'][0] == 0x04776e1e8Cc73FAAf61e4243Cc3f3A4f5458D6B5
-        // assert program_input['strategies'][1] == 0x0262e8331dfA2d2BeCF26395270BCe6a9Ac5A197
-        // assert program_input['strategies'][2] == 0x8D2fE2D23c97f33A665f6730fa07D25D37FF8355
-        // strategies = ids.strategies
-        // for i, val in enumerate(program_input['strategies']):
-        //      memory[strategies + i] = val
-
+    // Completing tab from input and assert totaldebt ration = 1
     %{  
-        assert len(program_input['debt_ratio']) == 2
         sum_debt_ratio = 0 
         for i, val in enumerate(program_input['debt_ratio']):
             sum_debt_ratio = sum_debt_ratio + val
         assert sum_debt_ratio == 10000
 
-        
-        assert len(program_input['strategy1_input']) == 1
-        assert len(program_input['strategy2_input']) == 2
+        ids.debt_ratio_len = len(program_input['debt_ratio'])
             
         debt_ratio = ids.debt_ratio
         for i, val in enumerate(program_input['debt_ratio']):
              memory[debt_ratio + i] = val
 
 
-        strat1ref = ids.strat1
-        for i, val in enumerate(program_input['strategy1_input']):
-            memory[strat1ref + i] = val
+        strat_data_ref = ids.strat_data
+        for i, val in enumerate(program_input['strategies_data']):
+            memory[strat_data_ref + i] = val
 
-        strat2ref = ids.strat2
-        for i, val in enumerate(program_input['strategy2_input']):
-            memory[strat2ref + i] = val
-
+        strat_calculation_ref = ids.strat_calculation
+        for i, val in enumerate(program_input['strategies_calculation']):
+            memory[strat_calculation_ref + i] = val
     %}
 
-    let (local strats : felt*) = alloc();
-    memcpy(strats, strat1, 1);
-    memcpy(strats + 1, strat2, 2);
-    let (input_hash) = keccak_felts(3, strats);
 
-    let (strat1_score) = calcul_score1(1, strat1, debt_ratio[0]);
-    let (strat2_score) = calcul_score2(2, strat2, debt_ratio[1]);
-    let final_score = strat1_score + strat2_score;
-    let (vault_apy,r) = unsigned_div_rem(final_score, 10000);
+    let (local cumulative_data_strat_array : felt*) = alloc();
+    let (local cumulative_calculation_strat_array : felt*) = alloc();
+    let (final_score_, input_hash_) = run_input(debt_ratio, strat_data, strat_calculation, 0, 0, cumulative_data_strat_array, 0, cumulative_calculation_strat_array, 0);
+    let (vault_apy_,r) = unsigned_div_rem(final_score_, 10000);
 
     //Return the program input and output
     let (callback) = get_label_location(serialize_word_from_pointer);
 
-    serialize_word(input_hash.high);
-    serialize_word(input_hash.low);
+    serialize_word(input_hash_.high);
+    serialize_word(input_hash_.low);
     serialize_array(debt_ratio, 2, 1, callback);    
-    serialize_word(vault_apy);
+    serialize_word(vault_apy_);
     return ();
 }

@@ -7,7 +7,7 @@ interface ICairoVerifier {
     function isValid(bytes32) external view returns (bool);
 }
 
-contract DebtAllocator {
+contract DebtAllocatorTest {
 
     ICairoVerifier public cairoVerifier = ICairoVerifier(address(0));
     bytes32 public cairoProgramHash = 0x0;
@@ -39,8 +39,9 @@ contract DebtAllocator {
     uint256 public stalePeriod = 24 * 3600;
     uint256 public staleSnapshotPeriod = 3 * 3600;
 
-    constructor(address _cairoVerifier) payable {
+    constructor(address _cairoVerifier, bytes32 _cairoProgramHash) payable {
         updateCairoVerifier(_cairoVerifier);
+        updateCairoProgramHash(_cairoProgramHash);
     }
 
     event NewSnapshot(uint256[][] dataStrategies, Calculation[][] calculation,uint256 inputHash, uint256 timestamp);
@@ -179,7 +180,7 @@ contract DebtAllocator {
         emit NewSnapshot(dataStrategies, calculationStrategies, inputHash, block.timestamp);
     }
 
-    function verifySolution(uint256[] memory programOutput) external {
+    function verifySolution(uint256[] memory programOutput) external returns(bytes32){
         // NOTE: we add the inputs as outputs to be able to check they were right
         (uint256 _inputHash,  uint256[] memory _debtRatios, uint256 _newSolution) = parseProgramOutput(programOutput); 
         bytes32 outputHash = keccak256(abi.encodePacked(programOutput));
@@ -197,13 +198,13 @@ contract DebtAllocator {
 
 
         // Check with cairoVerifier
-        require(cairoVerifier.isValid(fact), "MISSING_CAIRO_PROOF");
+        // require(cairoVerifier.isValid(fact), "MISSING_CAIRO_PROOF");
 
         // Check output is better than previous solution 
         // or no one has improven it in stale period (in case market conditions deteriorated)
         // remove for test 
         //require(_newSolution > currentAPY || block.timestamp - lastUpdate >= stalePeriod, "WRONG_SOLUTION");
-        require(_newSolution > currentAPY, "WRONG_SOLUTION");
+        // require(_newSolution > currentAPY, "WRONG_SOLUTION");
 
         currentAPY = _newSolution;
         debtRatios = _debtRatios;
@@ -211,6 +212,7 @@ contract DebtAllocator {
         proposer = msg.sender;
 
         emit NewSolution(_newSolution, _debtRatios, msg.sender, block.timestamp);
+        return(fact);
     }
 
     function parseProgramOutput(uint256[] memory programOutput) public view returns (uint256 _inputHash, uint256[] memory _debtRatios, uint256 _newSolution) {

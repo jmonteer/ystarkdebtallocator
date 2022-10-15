@@ -1,9 +1,11 @@
 
         {   
-            "debt_ratio": [2500, 7500],
-            "strategy1_input": [4978599044989],
-            "strategy2_input": [3767644315652883434, 13381740047458]
+            "debt_ratio": [5000, 5000],
+            "strategies_data": [2, 1, 2, 2, 3, 4],
+            "strategies_calculation": [2, 0, 1, 0, 10000, 1, 2, 2, 0, 1, 0, 10000, 1, 2]
         }
+
+    
 
         
         
