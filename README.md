@@ -79,9 +79,14 @@ the operation is described by a uint, 0 = +, 1 = -, 2 = x, 3 = /
 Exemple for a strategy: 
 Input: [4,7,2]
 Calculation_logic: [[1,0,0], [10000,2,2], [10001,20010,1], [10002,2,3]]
-step1 -> 7 + 4
-step2 -> 11 (step1) * 2
-step3 -> 22 (step2) - 10 (20010 - 20000)
-step4 -> 12(step3) / 2
 
-res = 6
+step1 -> 7(input 1) + 4 (input 0)
+
+step2 -> 11 (step1) * 2 (input 2)
+
+step3 -> 22 (step2) - 10 (20010 - 20000)
+
+step4 -> 12(step3) / 2 (input 2)
+
+res = 6 ✨
+
