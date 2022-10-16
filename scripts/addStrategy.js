@@ -15,7 +15,8 @@ async function main() {
   const STRATEGY_ADDRESS = "0x39AA39c021dfbaE8faC545936693aC917d5E7563";
   const STRATEGY_CONTRACTS = ["0x39AA39c021dfbaE8faC545936693aC917d5E7563","0x39AA39c021dfbaE8faC545936693aC917d5E7563"];
   const STRATEGY_CHECKDATA = ["0x18160ddd","0x8f840ddd"];
-  const NEW_CAIRO_PROGRAM_HASH = "0x02a7925118463c9679fce9aedeac8eca7bb27452f87c5477a65e88106a5ae3fe";
+  const STRATEGY_CALCULATION = [[0,1,0][10000,20003,2]]; // means (op1+op2)* 3 
+
   const [deployer] = await ethers.getSigners();
   console.log("Deploying contracts with the account:", deployer.address);
   console.log("Account balance:", (await deployer.getBalance()).toString());
@@ -27,18 +28,14 @@ async function main() {
   );
 
   // addStrategy(address strategy, uint16 maxDebtRatio,address[] memory contracts, bytes[] memory checkdata, bytes32 newCairoProgramHash)
-  const newStrategy = await debtAllocator.addStrategy(STRATEGY_ADDRESS, MAX_DEBT_RATIO,STRATEGY_CONTRACTS, STRATEGY_CHECKDATA, NEW_CAIRO_PROGRAM_HASH)
+  const newStrategy = await debtAllocator.addStrategy(STRATEGY_ADDRESS, MAX_DEBT_RATIO,STRATEGY_CONTRACTS, STRATEGY_CHECKDATA, STRATEGY_CALCULATION)
   console.log("Trx hash:", newStrategy.hash);
   const receipt = await newStrategy.wait()
-  const newCairoProgramHashEvent = receipt.events.find(x => x.event === "NewCairoProgramHash");
   const newStrategyEvent = receipt.events.find(x => x.event === "NewStrategy");
-
-
-  console.log(newCairoProgramHashEvent.args.newCairoProgramHash)
-
   console.log(newStrategyEvent.args.newStrategy)
   console.log(newStrategyEvent.args.strategyContracts)
   console.log(newStrategyEvent.args.strategyCheckData)
+  console.log(newStrategyEvent.args.strategyCalculation)
 }
 
 main().catch((error) => {

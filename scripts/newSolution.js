@@ -5,7 +5,7 @@ async function main() {
   const DEBTALLOCATOR_ADDRESS = process.env.DEBT_ALLOCATOR;
 
   //cairoProgramOutput
-  const PROGRAM_OUTPUT = [4688715344846809980146588670292981150n,212952945206872626841749451003070475874n,2,2500,7500,28258677380208228n];
+  const PROGRAM_OUTPUT = [214294432856748954646218952614427488837,282686271226971945777497920751595672460,2,5000,5000,7];
 
   const [deployer] = await ethers.getSigners();
   console.log("Deploying contracts with the account:", deployer.address);

@@ -19,6 +19,7 @@ async function main() {
   const newSnapshotEvent = receipt.events.find(x => x.event === "NewSnapshot");
   
   console.log(newSnapshotEvent.args.inputStrategies)
+  console.log(newSnapshotEvent.args.calculation)
   console.log(newSnapshotEvent.args.inputHash)
   console.log(newSnapshotEvent.args.timestamp)
 }

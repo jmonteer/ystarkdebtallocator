@@ -7,7 +7,7 @@ interface ICairoVerifier {
     function isValid(bytes32) external view returns (bool);
 }
 
-contract DebtAllocator {
+contract DebtAllocatorTest1 {
 
     ICairoVerifier public cairoVerifier = ICairoVerifier(address(0));
     bytes32 public cairoProgramHash = 0x0;
@@ -39,14 +39,15 @@ contract DebtAllocator {
     uint256 public stalePeriod = 24 * 3600;
     uint256 public staleSnapshotPeriod = 3 * 3600;
 
-    constructor(address _cairoVerifier) payable {
+    constructor(address _cairoVerifier, bytes32 _cairoProgramHash) payable {
         updateCairoVerifier(_cairoVerifier);
+        updateCairoProgramHash(_cairoProgramHash);
     }
 
     event NewSnapshot(uint256[][] dataStrategies, Calculation[][] calculation,uint256 inputHash, uint256 timestamp);
-    event NewStrategy(address newStrategy, address[] strategyContracts,bytes[] strategyCheckData);
+    event NewStrategy(address newStrategy, uint16 strategyMaxDebtRatio,address[] strategyContracts,bytes[] strategyCheckData, Calculation[] strategyCalculation);
+    event StrategyUpdated(address newStrategy, uint16 strategyMaxDebtRatio,address[] strategyContracts,bytes[] strategyCheckData, Calculation[] strategyCalculation);
     event StrategyRemoved(address strategyRemoved);
-    event StrategyMaxDebtRatioUpdated(address newStrategy, uint256 newStrategyMaxDebtRatio);
     event NewCairoProgramHash(bytes32 newCairoProgramHash);
     event NewCairoVerifier(address newCairoVerifier);
     event NewStalePeriod(uint256 newStalePeriod);
@@ -66,36 +67,57 @@ contract DebtAllocator {
     }
 
     function updateStalePeriod(uint256 _stalePeriod) public {
+        // TODO: put some limits?
         stalePeriod = _stalePeriod;
         emit NewStalePeriod(_stalePeriod);
     }
 
     function updateStaleSnapshotPeriod(uint256 _staleSnapshotPeriod) public {
+        // TODO: put some limits?
         staleSnapshotPeriod = _staleSnapshotPeriod;
         emit NewStaleSnapshotPeriod(_staleSnapshotPeriod);
     }
 
     function addStrategy(address strategy, uint16 maxDebtRatio,address[] memory contracts, bytes[] memory checkdata, Calculation[] memory calculations) external {
         strategies.push(strategy);
-        require(contracts.length == checkdata.length);
+        require(strategyMaxDebtRatio[strategy] == 0, "Strategy exists");
+        require(contracts.length == checkdata.length, "different tab length");
         for(uint256 i; i < contracts.length; i++) {
             strategyContracts[strategy].push(contracts[i]);
             strategyCheckdata[strategy].push(checkdata[i]);
         }
 
-        for(uint256 j; j < contracts.length; j++) {
-            strategyCalculation[strategy].push(calculations[j]);
+        for(uint256 j; j < calculations.length; j++) {
             strategyCalculation[strategy].push(calculations[j]);
         }
 
         strategyMaxDebtRatio[strategy] = maxDebtRatio;
-        emit NewStrategy(strategy, strategyContracts[strategy], strategyCheckdata[strategy]);
+        emit NewStrategy(strategy, strategyMaxDebtRatio[strategy] ,strategyContracts[strategy], strategyCheckdata[strategy], strategyCalculation[strategy]);
+    }
+
+    function updateStrategy(address strategy, uint16 maxDebtRatio,address[] memory contracts, bytes[] memory checkdata, Calculation[] memory calculations) external {
+        require(strategyMaxDebtRatio[strategy] != 0, "Strategy not found");
+        require(contracts.length == checkdata.length, "different tab length");
+        delete strategyContracts[strategy];
+        delete strategyCheckdata[strategy];
+        delete strategyCalculation[strategy];
+        delete strategyMaxDebtRatio[strategy];
+
+        
+        for(uint256 i; i < contracts.length; i++) {
+            strategyContracts[strategy].push(contracts[i]);
+            strategyCheckdata[strategy].push(checkdata[i]);
+        }
+        for(uint256 j; j < calculations.length; j++) {
+            strategyCalculation[strategy].push(calculations[j]);
+        }
+        strategyMaxDebtRatio[strategy] = maxDebtRatio;
+        emit StrategyUpdated(strategy, strategyMaxDebtRatio[strategy] ,strategyContracts[strategy], strategyCheckdata[strategy], strategyCalculation[strategy]);
     }
 
     function removeStrategy(uint256 index) external {
         //TODO: assert debtAllocation is nul for this strategy?
-        require(strategies.length > 0, "strategy tab is empty");
-        require(index < strategies.length && index >= 0, "select an appropriate index");
+        require(index < strategies.length && index >= 0, "index out of range");
         // require debtallocation = 0?
         address strategy = strategies[index];
         delete strategyContracts[strategy];
@@ -162,7 +184,7 @@ contract DebtAllocator {
         uint256 index2 = 0;
         uint256[] memory calculationStrategiesConcat = new uint256[](calculationStratTotalLen * 3);
         for(uint256 m = 0; m < calculationStrategies.length; m++) {
-            for(uint256 n = 0; n < calculationStrategies[n].length; n++) {
+            for(uint256 n = 0; n < calculationStrategies[m].length; n++) {
                 calculationStrategiesConcat[index2] = calculationStrategies[m][n].operand1;
                 index2++;
                 calculationStrategiesConcat[index2] = calculationStrategies[m][n].operand2;
@@ -179,30 +201,28 @@ contract DebtAllocator {
         emit NewSnapshot(dataStrategies, calculationStrategies, inputHash, block.timestamp);
     }
 
-    function verifySolution(uint256[] memory programOutput) external {
+    function verifySolution(uint256[] memory programOutput) external returns(bytes32){
         // NOTE: we add the inputs as outputs to be able to check they were right
         (uint256 _inputHash,  uint256[] memory _debtRatios, uint256 _newSolution) = parseProgramOutput(programOutput); 
         bytes32 outputHash = keccak256(abi.encodePacked(programOutput));
         bytes32 fact = keccak256(abi.encodePacked(cairoProgramHash, outputHash));
         
         // Used snapshot is valid and not stale
-        // uint256 _snapshotTimestamp = snapshotTimestamp[_inputHash];
-       // remove for test
-       // require(_inputHash==_inputHash && _snapshotTimestamp + staleSnapshotPeriod < block.timestamp, "INVALID_INPUTS");
-       require(_inputHash==_inputHash, "INVALID_INPUTS");
+        uint256 _snapshotTimestamp = snapshotTimestamp[_inputHash];
+        require(_inputHash==_inputHash && _snapshotTimestamp + staleSnapshotPeriod < block.timestamp, "INVALID_INPUTS");
+        require(_inputHash==inputHash, "INVALID_INPUTS");
 
 
         // check allowed debt ratio
         checkAllowedDebtRatio(_debtRatios);
 
-
         // Check with cairoVerifier
         require(cairoVerifier.isValid(fact), "MISSING_CAIRO_PROOF");
 
+        // check no one has improven it in stale period (in case market conditions deteriorated)
+        require(_newSolution > currentAPY || block.timestamp - lastUpdate >= stalePeriod, "WRONG_SOLUTION");
+
         // Check output is better than previous solution 
-        // or no one has improven it in stale period (in case market conditions deteriorated)
-        // remove for test 
-        //require(_newSolution > currentAPY || block.timestamp - lastUpdate >= stalePeriod, "WRONG_SOLUTION");
         require(_newSolution > currentAPY, "WRONG_SOLUTION");
 
         currentAPY = _newSolution;
@@ -211,6 +231,7 @@ contract DebtAllocator {
         proposer = msg.sender;
 
         emit NewSolution(_newSolution, _debtRatios, msg.sender, block.timestamp);
+        return(fact);
     }
 
     function parseProgramOutput(uint256[] memory programOutput) public view returns (uint256 _inputHash, uint256[] memory _debtRatios, uint256 _newSolution) {
